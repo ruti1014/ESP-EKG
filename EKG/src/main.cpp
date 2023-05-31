@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
 #include "SSD1306Wire.h" 
 #include "Ringbuffer.h"
 #include "Graph.h"
@@ -17,14 +19,16 @@ void IRAM_ATTR onADCTimer();
 void onBuffer();
 void initdisplay();
 void initTimer();
+void initUDP();
 void startUpScreen();
+void sendPacket();
 
 //global settings
 //static variables
 static int timerPreScaler = 80; //80 for 1 MHz increments at a cpu speed of 80 MHz
 static int adcTimeStep = (CPU_CLK_FREQ/timerPreScaler) / adcFreq; //calculate timerFrequency in µs based on cpu speed, prescaler and user set frequency in Hz
 static int bufferSize = (dataCaptureTime * 1000 * 1000)/adcTimeStep; //calculate buffersize to contain values for the set time range
-
+static uint16_t packetSize = bufferSize/2;
 //variables 
 bool newData = false;
 float estGraphTime;
@@ -36,6 +40,15 @@ SSD1306Wire display(0x3c, SDA, SCL);
 Ringbuffer buffer(bufferSize, &onBuffer, bufferSize/2);
 GraphSettings settings;
 Graph graph(&settings, &display);
+
+//Wifi credentials
+const char * ssid = "FRITZ!Box 7590 VL";
+const char * pass = "56616967766283031728"; 
+const int localPort = 4069;
+
+//Udp stuff
+WiFiUDP udp;
+
 
 void setup() {
   Serial.begin(9600);
@@ -52,7 +65,7 @@ void setup() {
   settings.length = 110;
   settings.height = 40;
   //optional graph settings
-  settings.movingAverage = 30;
+  settings.movingAverage = 8;
   settings.drawAxis = true;
   settings.drawArrowheads = true;
   settings.linemode = true;
@@ -64,10 +77,11 @@ void setup() {
   //Timer setup
   initTimer();
 
+  //UDP init
+  //initUDP();
+
   //init screens
   //startUpScreen();
-
-
   graph.drawGraphMeta();
 }
 
@@ -91,6 +105,7 @@ void IRAM_ATTR onADCTimer(){
 //buffer isr
 void onBuffer(){
 
+  //sendPacket();
 }
 
 //custom functions
@@ -111,6 +126,53 @@ void initTimer(){
   timerAlarmWrite(adcTimer, adcTimeStep, true);
   timerAlarmEnable(adcTimer);
 }
+
+void initUDP(){
+    uint8_t buffer[50];
+    Serial.print("Waiting for udp!");
+    udp.begin(WiFi.localIP(), localPort);
+
+    //wait for matlab handshake
+    bool connected = false;
+    while (!connected){
+        udp.parsePacket();
+        //await response 
+        int remBytes = udp.available();
+        if(udp.read(buffer, remBytes) > 0){
+            Serial.print("Message recieved: ");
+            Serial.println((char *)buffer);
+            connected = true;
+        }
+    }
+    delay(500);
+    //send buffersize to matlab
+    uint8_t *packet;
+    *packet = 2;
+    
+    udp.beginPacket(udp.remoteIP(),udp.remotePort());
+    udp.write((uint8_t*)&packetSize,2);
+   
+
+    //udp.write((uint8_t*)&packetsize[0],2);
+    //udp.write((uint8_t*)&packetsize[1],1);
+    udp.endPacket();
+    Serial.print("Connected to Matlab ");Serial.print(udp.remoteIP());Serial.print(":"); Serial.println(udp.remotePort());
+}
+
+void sendPacket(){
+  uint16_t *packetstart;
+  uint16_t *arraystart;
+  buffer.getCurrPointer(packetstart);
+  packetstart--; //reduce pointer to compensate for 0
+  Serial.print("current sendPointer value"); Serial.println(arraystart-packetstart);
+
+  udp.beginPacket(udp.remoteIP(), udp.remotePort());
+  udp.write((uint8_t*)packetstart, bufferSize);
+  udp.endPacket();
+
+}
+
+
 
 void startUpScreen(){
   //Welcome screen

@@ -58,6 +58,14 @@ uint16_t Ringbuffer::getData(int i) {
     return _RBArray[absIndex];
 }
 
+void Ringbuffer::getCurrPointer(uint16_t *tempPtr){
+    tempPtr = _arrayptr;
+}
+
+void Ringbuffer::getStartPointer(uint16_t *tempPtr){
+    tempPtr = _RBArray;
+}
+
 uint16_t Ringbuffer::getLastVal(){
     return _lastVal;
 }

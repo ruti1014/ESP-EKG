@@ -8,6 +8,8 @@ public:
     Ringbuffer(int buffsize, void (*intervalCallback)(void), int callbackInterval = -1); //callbackinervall default -1 -> no callback function
     void addData(uint16_t sensorData);
     uint16_t getData(int i);
+    void getCurrPointer(uint16_t * tempPtr);
+    void getStartPointer(uint16_t * tempPtr);
     uint16_t getLastVal();
 
 
