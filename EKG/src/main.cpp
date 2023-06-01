@@ -7,7 +7,7 @@
 
 
 //#define I2Cspeed 1000000
-#define analogIn 27
+#define analogIn 33 
 #define adcFreq 250
 #define dataCaptureTime 30
 
@@ -19,16 +19,21 @@ void IRAM_ATTR onADCTimer();
 void onBuffer();
 void initdisplay();
 void initTimer();
+void initWiFi();
 void initUDP();
 void startUpScreen();
 void sendPacket();
+void calcRuntime();
 
 //global settings
 //static variables
 static int timerPreScaler = 80; //80 for 1 MHz increments at a cpu speed of 80 MHz
 static int adcTimeStep = (CPU_CLK_FREQ/timerPreScaler) / adcFreq; //calculate timerFrequency in µs based on cpu speed, prescaler and user set frequency in Hz
 static int bufferSize = (dataCaptureTime * 1000 * 1000)/adcTimeStep; //calculate buffersize to contain values for the set time range
-static uint16_t packetSize = bufferSize/2;
+//Interval in wich packets of the buffer are sending
+static uint16_t packageAmount = 2;
+static uint16_t packetInterval = bufferSize/packageAmount;
+
 //variables 
 bool newData = false;
 float estGraphTime;
@@ -37,33 +42,34 @@ float estGraphTime;
 hw_timer_t *adcTimer = NULL;
 SSD1306Wire display(0x3c, SDA, SCL);
 //SSD1306Wire display(0x3c, SDA, SCL, GEOMETRY_128_64, I2C_ONE, 1000000);
-Ringbuffer buffer(bufferSize, &onBuffer, bufferSize/2);
+Ringbuffer buffer(bufferSize, &onBuffer, packetInterval);
 GraphSettings settings;
 Graph graph(&settings, &display);
 
 //Wifi credentials
-const char * ssid = "FRITZ!Box 7590 VL";
-const char * pass = "56616967766283031728"; 
+const char * ssid = "";
+const char * pass = ""; 
 const int localPort = 4069;
 
 //Udp stuff
 WiFiUDP udp;
 
-
 void setup() {
+
   Serial.begin(9600);
   Serial.print("ADC running at "); Serial.print(adcTimeStep); Serial.println(" µs.");
   Serial.print("Buffer size "); Serial.print(bufferSize); Serial.print(" capturing for "); Serial.print(dataCaptureTime); Serial.println(" s.");
-
+  
+  //init display
   initdisplay();
 
 
   //----- graph settings -----
   settings.title = "EKG";
   settings.x = 10;
-  settings.y = 20;
+  settings.y = 30;
   settings.length = 110;
-  settings.height = 40;
+  settings.height = 30;
   //optional graph settings
   settings.movingAverage = 8;
   settings.drawAxis = true;
@@ -73,23 +79,38 @@ void setup() {
 
   estGraphTime = ((settings.movingAverage * settings.length) * (adcTimeStep/1000000.0)); //avg = datapoints per pixel  times graph length times adcStepTime in seconds for estimate graph time
   Serial.print("Estimated graph time: "); Serial.print(estGraphTime); Serial.println(" s");
+  Serial.print("Approximately "); Serial.print((estGraphTime/dataCaptureTime)*100); Serial.println("% of the Total capture Time.");
+
+
+  //startUpScreen();
+  graph.drawGraphMeta();
+
+  
+  //init WiFi
+  initWiFi();
+
+  //UDP init
+  initUDP();
 
   //Timer setup
   initTimer();
 
-  //UDP init
-  //initUDP();
-
-  //init screens
-  //startUpScreen();
-  graph.drawGraphMeta();
 }
+
+uint16_t dummyData = 0;
 
 void loop() {
   if (newData){
-  graph.updateGraph(buffer.getLastVal());
-  newData = false;
+    if (dummyData >= 7500) dummyData = 0;
+    else dummyData++;
+    //buffer.addData(dummyData);
+    buffer.addData(analogRead(analogIn));
+    graph.updateGraph(buffer.getLastVal());
+    newData = false;
   }
+
+
+  calcRuntime();
 }
 
 //----------------------------- Custom Functions -----------------------------
@@ -98,14 +119,14 @@ void loop() {
 
 //timer isr
 void IRAM_ATTR onADCTimer(){ 
-  buffer.addData(analogRead(analogIn));
+  //buffer.addData(analogRead(analogIn));
   newData = true;
 }
 
 //buffer isr
 void onBuffer(){
-
-  //sendPacket();
+  Serial.println("sending");
+  sendPacket();
 }
 
 //custom functions
@@ -117,6 +138,19 @@ void initdisplay(){
   display.clear();
 
   display.setColor(WHITE);
+}
+
+//setup functions
+void initWiFi(){
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, pass);
+    //Wait for Wifi
+    Serial.print("Waiting for wifi ");
+    while (WiFi.status() != WL_CONNECTED){
+      delay(500);
+    }
+    Serial.println("\nConnected!");
+    Serial.print("ESP32-IP: "); Serial.println(WiFi.localIP());
 }
 
 void initTimer(){
@@ -131,7 +165,6 @@ void initUDP(){
     uint8_t buffer[50];
     Serial.print("Waiting for udp!");
     udp.begin(WiFi.localIP(), localPort);
-
     //wait for matlab handshake
     bool connected = false;
     while (!connected){
@@ -144,35 +177,36 @@ void initUDP(){
             connected = true;
         }
     }
+    Serial.println("Connection found proceeding");
     delay(500);
-    //send buffersize to matlab
-    uint8_t *packet;
-    *packet = 2;
-    
-    udp.beginPacket(udp.remoteIP(),udp.remotePort());
-    udp.write((uint8_t*)&packetSize,2);
-   
 
-    //udp.write((uint8_t*)&packetsize[0],2);
-    //udp.write((uint8_t*)&packetsize[1],1);
+    //send buffersize to matlab
+    /*
+    udp.beginPacket(udp.remoteIP(),udp.remotePort());
+    udp.write((uint8_t*)&packetInterval,2);
+    udp.write((uint8_t*)&packageAmount, 2);
     udp.endPacket();
-    Serial.print("Connected to Matlab ");Serial.print(udp.remoteIP());Serial.print(":"); Serial.println(udp.remotePort());
+    */
+
+    Serial.print("Connected to Matlab ");
+    Serial.print(udp.remoteIP());
+    Serial.print(":"); 
+    Serial.println(udp.remotePort());
 }
 
 void sendPacket(){
-  uint16_t *packetstart;
-  uint16_t *arraystart;
-  buffer.getCurrPointer(packetstart);
-  packetstart--; //reduce pointer to compensate for 0
-  Serial.print("current sendPointer value"); Serial.println(arraystart-packetstart);
-
+  uint16_t *packetstart = buffer.getCurrPointer();
+  //packetstart--; //reduce pointer to compensate for 0
+  packetstart = packetstart - packetInterval; //move pointer to beginning of packet
+  
+  
+  
   udp.beginPacket(udp.remoteIP(), udp.remotePort());
   udp.write((uint8_t*)packetstart, bufferSize);
   udp.endPacket();
+  
 
 }
-
-
 
 void startUpScreen(){
   //Welcome screen
@@ -204,4 +238,25 @@ void startUpScreen(){
   delay(3000);
   display.clear();
 
+}
+
+void calcRuntime(){
+  static long int loopCount = 0;
+  static long int lastStamp = micros();
+  static int loopTime = micros()-lastStamp;
+
+  loopTime = micros()-lastStamp;
+  if (loopTime >= 1000*1000){
+    loopTime = (loopTime)/loopCount;
+    lastStamp = micros();
+    loopCount = 0;
+    
+    String t = String(loopTime);
+    display.setColor(WHITE);
+    display.setFont(DejaVu_Sans_Mono_10);
+    display.drawString(5, 5, t);
+    display.drawString(25, 5, "µs");
+    display.display();
+  }
+  loopCount++;
 }
