@@ -13,10 +13,15 @@ write(udp, "new Phone who dis", "String", espIP, espPort);
 pause(1);
 
 
-%{
-data = 1:2;
+
+connected = true;
+%Standard packagevalues
+packetsize = 3750;
+packageAmount = 2;
+
+
 connected = false;
-%wait for packetsize
+%wait for packagesize and amount
 while (not(connected))
     if (udp.NumBytesAvailable>0)
         data = read(udp,2,'uint16');
@@ -24,10 +29,13 @@ while (not(connected))
         pause(.1); 
     end
 end
-%}
-connected = true;
-packetsize = 3750;
-packageAmount = 2;
+
+packageAmount = data(1)
+packetsize = data(2)
+
+
+
+
 
 %recieve data
 %esp sends 8 bit recieving 16 bit

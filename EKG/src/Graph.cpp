@@ -10,6 +10,7 @@ void Graph::updateGraph(int newDataPoint){ //dataLow and High set the range of t
     static int lastX = _graph->x;
     static int lastY = _graph->y + _graph->height;
     static int timeFrame = millis();
+    static float graphTime = -1;
 
     //check if moving average is ready to calculate
     if (averageCounter >= _graph->movingAverage - 1){
@@ -57,10 +58,18 @@ void Graph::updateGraph(int newDataPoint){ //dataLow and High set the range of t
         if (_currX >= _graph->length) {
             _currX = 0;
 
+
             //display graph time
+            //Remove old time
+            if (graphTime >= 0){
+            _display->setColor(BLACK);
+            _display->drawString(_graph->x + _graph->length - 10, _graph->y - 15, ((String)(graphTime) + " s"));
+            }
+            //draw new Time
             timeFrame = millis() - timeFrame;
+            graphTime = timeFrame/1000.0;
             _display->setColor(WHITE);
-            _display->drawString(_graph->x + _graph->length - 10, _graph->y - 10, ((String)(timeFrame/1000.0) + " s"));
+            _display->drawString(_graph->x + _graph->length - 10, _graph->y - 15, ((String)(graphTime) + " s"));
             _display->display();
             timeFrame = millis();
         }else _currX++;
@@ -78,6 +87,7 @@ void Graph::updateGraph(int newDataPoint){ //dataLow and High set the range of t
 
 //Draw fixed graphics for the graph i.e. Axis and arrows
 void Graph::drawGraphMeta(){
+    _display->clear();
     //set graph title
     _display->setFont(DejaVu_Sans_Mono_10);
     _display->setTextAlignment(TEXT_ALIGN_CENTER);

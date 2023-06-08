@@ -11,26 +11,29 @@
 #define adcFreq 250
 #define dataCaptureTime 30
 
-
-
-
-//function prototypes
+//--------------------------- function prototypes ---------------------------
+//hard and soft interrupt
 void IRAM_ATTR onADCTimer();
 void onBuffer();
+
+//init functions
 void initdisplay();
-void initTimer();
 void initWiFi();
+void initTimer();
 void initUDP();
 void startUpScreen();
+
+//Utility functions
 void sendPacket();
+uint16_t readData(bool dummy);
 void calcRuntime();
 
-//global settings
+//--------------------------- global settings ---------------------------
 //static variables
 static int timerPreScaler = 80; //80 for 1 MHz increments at a cpu speed of 80 MHz
 static int adcTimeStep = (CPU_CLK_FREQ/timerPreScaler) / adcFreq; //calculate timerFrequency in µs based on cpu speed, prescaler and user set frequency in Hz
 static int bufferSize = (dataCaptureTime * 1000 * 1000)/adcTimeStep; //calculate buffersize to contain values for the set time range
-//Interval in wich packets of the buffer are sending
+//Interval in which packets of the buffer are sending
 static uint16_t packageAmount = 2;
 static uint16_t packetInterval = bufferSize/packageAmount;
 
@@ -38,7 +41,7 @@ static uint16_t packetInterval = bufferSize/packageAmount;
 bool newData = false;
 float estGraphTime;
 
-//objects
+//--------------------------- objects ---------------------------
 hw_timer_t *adcTimer = NULL;
 SSD1306Wire display(0x3c, SDA, SCL);
 //SSD1306Wire display(0x3c, SDA, SCL, GEOMETRY_128_64, I2C_ONE, 1000000);
@@ -46,7 +49,7 @@ Ringbuffer buffer(bufferSize, &onBuffer, packetInterval);
 GraphSettings settings;
 Graph graph(&settings, &display);
 
-//Wifi credentials
+//--------------------------- Wifi credentials ---------------------------
 const char * ssid = "";
 const char * pass = ""; 
 const int localPort = 4069;
@@ -63,7 +66,6 @@ void setup() {
   //init display
   initdisplay();
 
-
   //----- graph settings -----
   settings.title = "EKG";
   settings.x = 10;
@@ -76,18 +78,17 @@ void setup() {
   settings.drawArrowheads = true;
   settings.linemode = true;
 
-
-  estGraphTime = ((settings.movingAverage * settings.length) * (adcTimeStep/1000000.0)); //avg = datapoints per pixel  times graph length times adcStepTime in seconds for estimate graph time
+  //avg = datapoints per pixel  times graph length times adcStepTime in seconds for estimate graph time
+  estGraphTime = ((settings.movingAverage * settings.length) * (adcTimeStep/1000000.0)); 
   Serial.print("Estimated graph time: "); Serial.print(estGraphTime); Serial.println(" s");
   Serial.print("Approximately "); Serial.print((estGraphTime/dataCaptureTime)*100); Serial.println("% of the Total capture Time.");
 
 
-  //startUpScreen();
-  graph.drawGraphMeta();
-
-  
   //init WiFi
   initWiFi();
+
+  //Startup information and matlab wait
+  startUpScreen();
 
   //UDP init
   initUDP();
@@ -95,16 +96,18 @@ void setup() {
   //Timer setup
   initTimer();
 
+  //setup fixed graph
+  graph.drawGraphMeta();
+
 }
 
-uint16_t dummyData = 0;
+
 
 void loop() {
+
+  //add new data (sensor or dummy)
   if (newData){
-    if (dummyData >= 7500) dummyData = 0;
-    else dummyData++;
-    //buffer.addData(dummyData);
-    buffer.addData(analogRead(analogIn));
+    buffer.addData(readData(true));
     graph.updateGraph(buffer.getLastVal());
     newData = false;
   }
@@ -115,22 +118,18 @@ void loop() {
 
 //----------------------------- Custom Functions -----------------------------
 
-// ISR
-
-//timer isr
+//----- ISR -----
 void IRAM_ATTR onADCTimer(){ 
   //buffer.addData(analogRead(analogIn));
   newData = true;
 }
 
-//buffer isr
 void onBuffer(){
   Serial.println("sending");
   sendPacket();
 }
 
-//custom functions
-
+//----- setup functions -----
 void initdisplay(){
   display.init();
   display.flipScreenVertically();
@@ -140,7 +139,6 @@ void initdisplay(){
   display.setColor(WHITE);
 }
 
-//setup functions
 void initWiFi(){
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, pass);
@@ -165,7 +163,8 @@ void initUDP(){
     uint8_t buffer[50];
     Serial.print("Waiting for udp!");
     udp.begin(WiFi.localIP(), localPort);
-    //wait for matlab handshake
+
+    //wait for matlab connection
     bool connected = false;
     while (!connected){
         udp.parsePacket();
@@ -177,35 +176,24 @@ void initUDP(){
             connected = true;
         }
     }
+
     Serial.println("Connection found proceeding");
     delay(500);
-
-    //send buffersize to matlab
-    /*
-    udp.beginPacket(udp.remoteIP(),udp.remotePort());
-    udp.write((uint8_t*)&packetInterval,2);
-    udp.write((uint8_t*)&packageAmount, 2);
-    udp.endPacket();
-    */
 
     Serial.print("Connected to Matlab ");
     Serial.print(udp.remoteIP());
     Serial.print(":"); 
     Serial.println(udp.remotePort());
-}
 
-void sendPacket(){
-  uint16_t *packetstart = buffer.getCurrPointer();
-  //packetstart--; //reduce pointer to compensate for 0
-  packetstart = packetstart - packetInterval; //move pointer to beginning of packet
-  
-  
-  
-  udp.beginPacket(udp.remoteIP(), udp.remotePort());
-  udp.write((uint8_t*)packetstart, bufferSize);
-  udp.endPacket();
-  
-
+    
+    //send packagesize and package amount
+    uint16_t * amount = &packageAmount; 
+    uint16_t * size = &packetInterval; 
+    delay(2000);
+    udp.beginPacket(udp.remoteIP(), udp.remotePort());
+    udp.write((uint8_t*)amount, 2);
+    udp.write((uint8_t*)size, 2);
+    udp.endPacket();
 }
 
 void startUpScreen(){
@@ -223,21 +211,55 @@ void startUpScreen(){
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   String info = "Adc freq: " + (String)adcFreq + " Hz";
   //info += "\nadc time: " + (String)adcTimeStep + " s";
-  info += "\nbuffer size: " + (String)bufferSize;
-  info += "\ngraph time: " + (String) estGraphTime + " s";
+  info += "\nPackages: " + (String)packageAmount;
+  info += "\nPackagesize: " + (String)packetInterval;
   display.drawString(5, 5, info);
   display.display();
-  delay(6000);
+  delay(2000);
   display.clear();
 
   //network screen
-  info = "192.168.152.53";
-  info += "\n4069";
-  display.drawString(5, 5, info);
+  display.setTextAlignment(TEXT_ALIGN_CENTER);
+  info = WiFi.localIP().toString();
+  info += ":";
+  info += localPort;
+  display.drawString(64, 5, info);
+  display.drawString(64, 25, "Waiting for matlab!");
   display.display();
-  delay(3000);
-  display.clear();
+}
 
+
+//----- utility functions -----
+void sendPacket(){
+  uint16_t *packetstart = buffer.getCurrPointer();
+  //packetstart--; //reduce pointer to compensate for 0
+  packetstart = packetstart - packetInterval; //move pointer to beginning of packet
+  
+  udp.beginPacket(udp.remoteIP(), udp.remotePort());
+  udp.write((uint8_t*)packetstart, bufferSize); //Using full buffersize to compensate 8bit sending
+  udp.endPacket();
+  
+
+}
+
+uint16_t readData(bool dummy){
+  static uint16_t data = 0;
+  int dummySawValue = 4095; //sawtooth signal amplitude 
+  int sawAmplifier = 4;
+
+
+
+      if (!dummy){//sensor data
+        data = analogRead(analogIn);
+        //clip faulty data
+        if (data > 4095) data = 4095;
+        else if(data < 0) data = 0;
+
+      }else{//dummy data
+        if (data > dummySawValue) data = 0;
+        data += sawAmplifier;
+      }
+  return data;
 }
 
 void calcRuntime(){
@@ -255,8 +277,10 @@ void calcRuntime(){
     display.setColor(WHITE);
     display.setFont(DejaVu_Sans_Mono_10);
     display.drawString(5, 5, t);
-    display.drawString(25, 5, "µs");
+    display.drawString(20, 5, "µs");
     display.display();
   }
   loopCount++;
 }
+
+
