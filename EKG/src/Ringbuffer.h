@@ -11,6 +11,7 @@ public:
     uint16_t* getCurrPointer();
     uint16_t* getStartPointer();
     uint16_t getLastVal();
+    int getSize();
 
 
 private:

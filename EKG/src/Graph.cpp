@@ -5,7 +5,7 @@ Graph::Graph(GraphSettings *graph, SSD1306Wire *display){
     _display = display;
 };
 
-void Graph::updateGraph(int newDataPoint){ //dataLow and High set the range of the value, default set to analogRead range
+void Graph::updateGraph( int newDataPoint){ //dataLow and High set the range of the value, default set to analogRead range
     static int averageCounter = 0;
     static int lastX = _graph->x;
     static int lastY = _graph->y + _graph->height;
@@ -84,6 +84,53 @@ void Graph::updateGraph(int newDataPoint){ //dataLow and High set the range of t
     }
 };
 
+void Graph::drawCompleteFrame(Ringbuffer *buffer){
+
+    int dataFrame = 500;
+    int avgStep = buffer->getSize()/_graph->length;
+    int avgCounter = 1;
+    int x, y;
+    int lastX = _graph->x;
+    int lastY = _graph->y;
+
+    //reset graph area
+    _display->setColor(BLACK);
+    _display->drawRect(_graph->x, _graph->y, _graph->length, _graph->height);
+    _display->display();
+    _display->setColor(WHITE);
+    int data;
+    for (int i = 0; i < dataFrame; i++){
+        
+        //calculate average
+        if (avgCounter >= avgStep){
+            data += buffer->getData(i);
+            avgCounter++;
+        }else {
+            Serial.println(data);
+            data = data/avgCounter;
+            avgCounter = 1;
+
+            x = _graph->x + i;
+            y = map(data, _lowDataRange, _highDataRange, 0, _graph->height);
+            y = y + _graph->height;
+            //check if x or y clip out of graph range
+            if (y > (_graph->y + _graph->height)) y = (_graph->y + _graph->height); 
+            if (y < _graph->y) y = _graph->y;
+
+            if (x > (_graph->x + _graph->length)) x = (_graph->x + _graph->length); 
+            if (x < _graph->x) x = _graph->x;
+            
+
+
+            _display->drawLine(lastX, lastY, x, y);
+            x = lastX;
+            y = lastY;
+        }
+    }
+    _display->display();
+
+
+}
 
 //Draw fixed graphics for the graph i.e. Axis and arrows
 void Graph::drawGraphMeta(){
@@ -107,3 +154,4 @@ void Graph::drawGraphMeta(){
     _display->display();
     _display->setFont(DejaVu_Sans_Mono_8);
 }
+

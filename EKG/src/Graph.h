@@ -2,6 +2,7 @@
 #define GRAPH_H
 #include <Arduino.h>
 #include "SSD1306Wire.h"
+#include "Ringbuffer.h"
 
 struct GraphSettings{
   String title;
@@ -18,6 +19,7 @@ class Graph{
         Graph(GraphSettings *graph, SSD1306Wire *display);
 
         void updateGraph(int newDataPoint);
+        void drawCompleteFrame(Ringbuffer *buffer);
         void drawGraphMeta(); //note that axis are additional to lenght and height
 
     private:

@@ -26,19 +26,22 @@ void startUpScreen();
 //Utility functions
 void sendPacket();
 uint16_t readData(bool dummy);
+void matlabPing();
 void calcRuntime();
+void loadingCircle();
 
 //--------------------------- global settings ---------------------------
 //static variables
-static int timerPreScaler = 80; //80 for 1 MHz increments at a cpu speed of 80 MHz
-static int adcTimeStep = (CPU_CLK_FREQ/timerPreScaler) / adcFreq; //calculate timerFrequency in µs based on cpu speed, prescaler and user set frequency in Hz
-static int bufferSize = (dataCaptureTime * 1000 * 1000)/adcTimeStep; //calculate buffersize to contain values for the set time range
+const int timerPreScaler = 80; //80 for 1 MHz increments at a cpu speed of 80 MHz
+const int adcTimeStep = (CPU_CLK_FREQ/timerPreScaler) / adcFreq; //calculate timerFrequency in µs based on cpu speed, prescaler and user set frequency in Hz
+const int bufferSize = (dataCaptureTime * 1000 * 1000)/adcTimeStep; //calculate buffersize to contain values for the set time range
 //Interval in which packets of the buffer are sending
-static uint16_t packageAmount = 2;
-static uint16_t packetInterval = bufferSize/packageAmount;
+const uint16_t packageAmount = 2;
+const uint16_t packetInterval = bufferSize/packageAmount;
 
 //variables 
 bool newData = false;
+bool connected = false;
 float estGraphTime;
 
 //--------------------------- objects ---------------------------
@@ -87,7 +90,7 @@ void setup() {
   //init WiFi
   initWiFi();
 
-  //Startup information and matlab wait
+  //Startup information
   startUpScreen();
 
   //UDP init
@@ -101,14 +104,16 @@ void setup() {
 
 }
 
-
+bool stop = false;
 
 void loop() {
+ //matlabPing();
 
   //add new data (sensor or dummy)
   if (newData){
     buffer.addData(readData(true));
     graph.updateGraph(buffer.getLastVal());
+    //graph.drawCompleteFrame(&buffer);
     newData = false;
   }
 
@@ -125,8 +130,7 @@ void IRAM_ATTR onADCTimer(){
 }
 
 void onBuffer(){
-  Serial.println("sending");
-  sendPacket();
+  //sendPacket();
 }
 
 //----- setup functions -----
@@ -144,9 +148,13 @@ void initWiFi(){
     WiFi.begin(ssid, pass);
     //Wait for Wifi
     Serial.print("Waiting for wifi ");
+    display.setTextAlignment(TEXT_ALIGN_CENTER);
+    display.drawString(64, 10, "Waiting on WiFi.");
     while (WiFi.status() != WL_CONNECTED){
-      delay(500);
+      loadingCircle();
+      delay(5);
     }
+    display.clear();
     Serial.println("\nConnected!");
     Serial.print("ESP32-IP: "); Serial.println(WiFi.localIP());
 }
@@ -161,12 +169,14 @@ void initTimer(){
 
 void initUDP(){
     uint8_t buffer[50];
-    Serial.print("Waiting for udp!");
+    Serial.println("Waiting for udp!");
     udp.begin(WiFi.localIP(), localPort);
 
+
+
     //wait for matlab connection
-    bool connected = false;
     while (!connected){
+        loadingCircle();
         udp.parsePacket();
         //await response 
         int remBytes = udp.available();
@@ -175,7 +185,9 @@ void initUDP(){
             Serial.println((char *)buffer);
             connected = true;
         }
+        
     }
+
 
     Serial.println("Connection found proceeding");
     delay(500);
@@ -185,15 +197,17 @@ void initUDP(){
     Serial.print(":"); 
     Serial.println(udp.remotePort());
 
-    
+    /*
     //send packagesize and package amount
+    //calculate simple checksum for header validation
     uint16_t * amount = &packageAmount; 
-    uint16_t * size = &packetInterval; 
+    uint16_t * packagesize = &packetInterval; 
     delay(2000);
     udp.beginPacket(udp.remoteIP(), udp.remotePort());
     udp.write((uint8_t*)amount, 2);
-    udp.write((uint8_t*)size, 2);
+    udp.write((uint8_t*)packagesize, 2);
     udp.endPacket();
+    */
 }
 
 void startUpScreen(){
@@ -223,23 +237,23 @@ void startUpScreen(){
   info = WiFi.localIP().toString();
   info += ":";
   info += localPort;
-  display.drawString(64, 5, info);
-  display.drawString(64, 25, "Waiting for matlab!");
+  display.drawString(64, 0, info);
+  display.drawString(64, 10, "Waiting for Matlab!");
   display.display();
 }
 
 
 //----- utility functions -----
 void sendPacket(){
-  uint16_t *packetstart = buffer.getCurrPointer();
+  Serial.print("Sending packet to "); Serial.print(udp.remoteIP()); Serial.print(":"); Serial.println(udp.remotePort());
+  uint16_t* packetstart = buffer.getCurrPointer();
+  const uint16_t * amount = &packageAmount; 
   //packetstart--; //reduce pointer to compensate for 0
   packetstart = packetstart - packetInterval; //move pointer to beginning of packet
-  
   udp.beginPacket(udp.remoteIP(), udp.remotePort());
+  udp.write((uint8_t*)amount, 2);
   udp.write((uint8_t*)packetstart, bufferSize); //Using full buffersize to compensate 8bit sending
   udp.endPacket();
-  
-
 }
 
 uint16_t readData(bool dummy){
@@ -258,14 +272,30 @@ uint16_t readData(bool dummy){
       }else{//dummy data
         if (data > dummySawValue) data = 0;
         data += sawAmplifier;
+        data = 42;
       }
   return data;
+}
+
+void matlabPing(){
+  uint8_t buffer[50];
+
+  //await response 
+  int remBytes = udp.parsePacket();
+  //await response 
+  if(udp.read(buffer, remBytes) > 0){
+      Serial.print("Message recieved: ");
+      Serial.println((char *)buffer);
+      connected = true;
+  }
+
 }
 
 void calcRuntime(){
   static long int loopCount = 0;
   static long int lastStamp = micros();
   static int loopTime = micros()-lastStamp;
+  static String t = "";
 
   loopTime = micros()-lastStamp;
   if (loopTime >= 1000*1000){
@@ -273,14 +303,67 @@ void calcRuntime(){
     lastStamp = micros();
     loopCount = 0;
     
-    String t = String(loopTime);
-    display.setColor(WHITE);
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
     display.setFont(DejaVu_Sans_Mono_10);
-    display.drawString(5, 5, t);
-    display.drawString(20, 5, "µs");
+    display.setColor(BLACK);
+    display.drawString(0, 5, t); //remove old time
+    display.setColor(WHITE);
+    t = String(loopTime);
+    display.drawString(0, 5, t);
+    display.drawString(30, 5, "µs");
     display.display();
   }
   loopCount++;
+}
+
+void loadingCircle(){
+  int amountBars = 12;
+  int zeroX = 64;
+  int zeroY = 45; 
+  int innerRadius = 8;
+  int outerRadius = 15;
+  float angle = (2*PI) / amountBars;
+  static int x1, x2, y1, y2;
+  static int lastX1 = -1, lastX2, lastY1, lastY2;
+  static int i = 0;
+
+  static int barDelay = 100;
+  static int stamp = millis();
+
+
+  if (millis() - stamp > barDelay){
+
+    //Serial.print("White Line index "); Serial.print(i); Serial.print(" from ["); Serial.print(x1); Serial.print("|"); Serial.print(y1); Serial.print("]");
+    //Serial.print(" to ["); Serial.print(x2); Serial.print("|"); Serial.print(y2); Serial.println("]");
+
+    x1 = zeroX + cos((float)i*angle) * innerRadius;
+    x2 = zeroX + cos((float)i*angle) * outerRadius;
+    y1 = zeroY + sin((float)i*angle) * innerRadius;
+    y2 = zeroY + sin((float)i*angle) * outerRadius;
+
+    display.setColor(BLACK);
+    display.drawLine(x1, y1, x2, y2);
+
+    if (lastX1 != -1){
+      display.setColor(WHITE);
+      display.drawLine(lastX1, lastY1, lastX2, lastY2);
+      //Serial.print("Black Line index "); Serial.print(i); Serial.print(" from ["); Serial.print(lastX1); Serial.print("|"); Serial.print(lastY1); Serial.print("]");
+      //Serial.print(" to ["); Serial.print(lastX2); Serial.print("|"); Serial.print(lastY2); Serial.println("]");
+    }
+
+    display.display();
+
+    lastX1 = x1;
+    lastX2 = x2;
+    lastY1 = y1;
+    lastY2 = y2;
+
+
+
+    i++;
+    if (i >= amountBars) i = 0;
+    stamp = millis();
+  }
 }
 
 

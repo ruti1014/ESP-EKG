@@ -71,6 +71,11 @@ uint16_t Ringbuffer::getLastVal(){
     return _lastVal;
 }
 
+int Ringbuffer::getSize(){
+    if (!_circularMode) return _circularCount;
+    else return _RBsize;
+}
+
 int Ringbuffer::_convertIndex(int i) {
     int index;
     if (!_circularMode) { //until first filled absolute index = relative index

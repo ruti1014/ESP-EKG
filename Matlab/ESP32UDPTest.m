@@ -11,52 +11,43 @@ udp = udpport;
 %Esp connection message
 write(udp, "new Phone who dis", "String", espIP, espPort);
 pause(1);
+disp("Waiting on ESP..." + newline);
 
 
+done = false;
 
-connected = true;
 %Standard packagevalues
 packetsize = 3750;
-packageAmount = 2;
-
-
-connected = false;
-%wait for packagesize and amount
-while (not(connected))
-    if (udp.NumBytesAvailable>0)
-        data = read(udp,2,'uint16');
-        connected = true;
-        pause(.1); 
-    end
-end
-
-packageAmount = data(1)
-packetsize = data(2)
-
-
-
+packetAmount = 2;
 
 
 %recieve data
-%esp sends 8 bit recieving 16 bit
-packageRecieved = 0;
+%esp sends 8 bit, matlab reading 16 bit
+packetsRecieved = 0;
 
 data = [];
-if (packetsize > 0)
-    while (true && connected)
-        if (udp.NumBytesAvailable>0)
-            temp = read(udp,packetsize,'uint16');
-            data = cat(2, data, temp);
-            packageRecieved = packageRecieved + 1
-            pause(.01); 
-            flush(udp)
-        end
+while (true && not(done))
+    availableBytes = udp.NumBytesAvailable;
+    
 
-        if (packageRecieved >= packageAmount)
-            connected = false;
-        end
+    %recieve data packet
+    if (availableBytes>0)
+        disp("Recieved packet " + (1 + packetsRecieved) + "/" + packetAmount);
+        disp("Bytes: " + availableBytes);
+        temp = read(udp, availableBytes, "int16");
+        packetAmount = temp(1);
+        data = cat(2, data, temp(2:(availableBytes/2)));
+        packetsRecieved = packetsRecieved + 1;
     end
+    
+    if (packetsRecieved >= packetAmount)
+        done = true;
+    end
+    
+    pause(.1)
 end
+
+disp("--> Finished, plotting data")
 
 figure(1)
 plot(data)
