@@ -36,12 +36,13 @@ const int timerPreScaler = 80; //80 for 1 MHz increments at a cpu speed of 80 MH
 const int adcTimeStep = (CPU_CLK_FREQ/timerPreScaler) / adcFreq; //calculate timerFrequency in µs based on cpu speed, prescaler and user set frequency in Hz
 const int bufferSize = (dataCaptureTime * 1000 * 1000)/adcTimeStep; //calculate buffersize to contain values for the set time range
 //Interval in which packets of the buffer are sending
-const uint16_t packageAmount = 2;
-const uint16_t packetInterval = bufferSize/packageAmount;
+const uint16_t packetAmount = 5; //package amount per half e.g. 7500 buffer --> 3750/5 = 750
+const uint16_t packetInterval = bufferSize/2; //send after half buffer full
 
 //variables 
 bool newData = false;
-bool connected = false;
+bool udpConnected = false;
+int packetSended = 0;
 float estGraphTime;
 
 //--------------------------- objects ---------------------------
@@ -53,8 +54,8 @@ GraphSettings settings;
 Graph graph(&settings, &display);
 
 //--------------------------- Wifi credentials ---------------------------
-const char * ssid = "";
-const char * pass = ""; 
+const char * ssid = "FRITZ!Box 7590 VL";
+const char * pass = "56616967766283031728"; 
 const int localPort = 4069;
 
 //Udp stuff
@@ -104,17 +105,24 @@ void setup() {
 
 }
 
-bool stop = false;
+
+bool bufferReady = false;
 
 void loop() {
- //matlabPing();
+ matlabPing();
 
   //add new data (sensor or dummy)
   if (newData){
-    buffer.addData(readData(true));
+    buffer.addData(readData(false));
     graph.updateGraph(buffer.getLastVal());
     //graph.drawCompleteFrame(&buffer);
     newData = false;
+  }
+
+  if (bufferReady){
+    if (udpConnected){
+      sendPacket();
+    }
   }
 
 
@@ -125,12 +133,11 @@ void loop() {
 
 //----- ISR -----
 void IRAM_ATTR onADCTimer(){ 
-  //buffer.addData(analogRead(analogIn));
   newData = true;
 }
 
 void onBuffer(){
-  //sendPacket();
+  bufferReady = true;
 }
 
 //----- setup functions -----
@@ -168,50 +175,13 @@ void initTimer(){
 }
 
 void initUDP(){
-    uint8_t buffer[50];
     Serial.println("Waiting for udp!");
     udp.begin(WiFi.localIP(), localPort);
-
-
-
-    //wait for matlab connection
-    while (!connected){
-        loadingCircle();
-        udp.parsePacket();
-        //await response 
-        int remBytes = udp.available();
-        if(udp.read(buffer, remBytes) > 0){
-            Serial.print("Message recieved: ");
-            Serial.println((char *)buffer);
-            connected = true;
-        }
-        
-    }
-
-
-    Serial.println("Connection found proceeding");
-    delay(500);
-
-    Serial.print("Connected to Matlab ");
-    Serial.print(udp.remoteIP());
-    Serial.print(":"); 
-    Serial.println(udp.remotePort());
-
-    /*
-    //send packagesize and package amount
-    //calculate simple checksum for header validation
-    uint16_t * amount = &packageAmount; 
-    uint16_t * packagesize = &packetInterval; 
-    delay(2000);
-    udp.beginPacket(udp.remoteIP(), udp.remotePort());
-    udp.write((uint8_t*)amount, 2);
-    udp.write((uint8_t*)packagesize, 2);
-    udp.endPacket();
-    */
 }
 
 void startUpScreen(){
   //Welcome screen
+  display.setColor(WHITE);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.setFont(DejaVu_Sans_Mono_16);
   display.drawString(64, 5, "EKG-Labor");
@@ -221,16 +191,21 @@ void startUpScreen(){
   delay(3000);
   display.clear();
 
+
+String info;
+
+/*
   //info screen
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   String info = "Adc freq: " + (String)adcFreq + " Hz";
   //info += "\nadc time: " + (String)adcTimeStep + " s";
-  info += "\nPackages: " + (String)packageAmount;
+  info += "\nPackages: " + (String)packetAmount;
   info += "\nPackagesize: " + (String)packetInterval;
   display.drawString(5, 5, info);
   display.display();
   delay(2000);
   display.clear();
+*/
 
   //network screen
   display.setTextAlignment(TEXT_ALIGN_CENTER);
@@ -238,22 +213,47 @@ void startUpScreen(){
   info += ":";
   info += localPort;
   display.drawString(64, 0, info);
-  display.drawString(64, 10, "Waiting for Matlab!");
   display.display();
+  delay(4000);
 }
 
 
 //----- utility functions -----
 void sendPacket(){
-  Serial.print("Sending packet to "); Serial.print(udp.remoteIP()); Serial.print(":"); Serial.println(udp.remotePort());
-  uint16_t* packetstart = buffer.getCurrPointer();
-  const uint16_t * amount = &packageAmount; 
-  //packetstart--; //reduce pointer to compensate for 0
-  packetstart = packetstart - packetInterval; //move pointer to beginning of packet
-  udp.beginPacket(udp.remoteIP(), udp.remotePort());
-  udp.write((uint8_t*)amount, 2);
-  udp.write((uint8_t*)packetstart, bufferSize); //Using full buffersize to compensate 8bit sending
-  udp.endPacket();
+  static uint16_t* packetstart = buffer.getStartPointer();
+  const uint16_t * amount = &packetAmount; 
+  int packetSize = (bufferSize/packetAmount); 
+
+  static int packetSended = 0; //Track packets sended
+  static int bufferChunkSended = 0; //track buffer chunks sended
+
+
+    if (bufferChunkSended < bufferSize/packetInterval) {
+      if (packetSended < packetAmount){
+        int ptrIncrement = (bufferChunkSended*packetInterval) + ((bufferSize/2)/packetAmount)*packetSended;
+        Serial.print("Pointer value from ");
+        Serial.print((int)packetstart); Serial.print(" + "); Serial.print(ptrIncrement);
+        Serial.print(" with "); Serial.println(packetSize/2);
+        
+        
+        //create Packet
+        udp.beginPacket(udp.remoteIP(), udp.remotePort());
+        //udp.write((uint8_t*)amount, 2);
+        udp.write((uint8_t*) (packetstart + ptrIncrement), packetSize); 
+        udp.endPacket();
+        packetSended++;
+        //Serial.print(packetSended); Serial.print("/"); Serial.print(packetAmount); Serial.println(" packets sended.");
+      }else{
+        bufferChunkSended++;
+        bufferReady = false;
+        packetSended = 0;
+        Serial.print(bufferChunkSended); Serial.print("/");Serial.print(bufferSize/packetInterval); Serial.println(" chunks sended.");
+      }
+
+    }else {
+      udpConnected = false;
+      bufferChunkSended = 0;
+    }
 }
 
 uint16_t readData(bool dummy){
@@ -272,7 +272,6 @@ uint16_t readData(bool dummy){
       }else{//dummy data
         if (data > dummySawValue) data = 0;
         data += sawAmplifier;
-        data = 42;
       }
   return data;
 }
@@ -281,12 +280,14 @@ void matlabPing(){
   uint8_t buffer[50];
 
   //await response 
+
   int remBytes = udp.parsePacket();
   //await response 
   if(udp.read(buffer, remBytes) > 0){
+    Serial.print("UDP ready at "); Serial.print(udp.remoteIP()); Serial.print(":"); Serial.println(udp.remotePort());
       Serial.print("Message recieved: ");
       Serial.println((char *)buffer);
-      connected = true;
+      udpConnected = true;
   }
 
 }
